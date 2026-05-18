@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Agent Team Flow</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #ffffff;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    padding: 40px;
+    color: #1a1a1a;
+  }
+
+  h1 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #1a1a1a;
+    margin-bottom: 4px;
+  }
+  .subtitle {
+    font-size: 12px;
+    color: #888;
+    margin-bottom: 36px;
+  }
+
+  .flow {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+    max-width: 640px;
+  }
+
+  /* ===== ボックス ===== */
+  .box {
+    width: 100%;
+    border: 1.5px solid #d0d0d0;
+    border-radius: 6px;
+    padding: 12px 18px;
+    background: #f9f9f9;
+    font-size: 13px;
+    color: #1a1a1a;
+  }
+  .box.start {
+    background: #1a3a6b;
+    border-color: #1a3a6b;
+    color: #ffffff;
+    font-weight: 600;
+    font-size: 14px;
+  }
+  .box.script {
+    background: #eef3fc;
+    border-color: #a0bbee;
+    color: #1a3a6b;
+  }
+  .box.manual {
+    background: #fff8e6;
+    border-color: #f0c040;
+    color: #7a5000;
+  }
+  .box.save {
+    background: #f0faf4;
+    border-color: #80c8a0;
+    color: #1a5a30;
+  }
+  .box.final {
+    background: #1a3a6b;
+    border-color: #1a3a6b;
+    color: #ffffff;
+    font-weight: 600;
+  }
+  .box.group-label {
+    background: #f0f0f0;
+    border-color: #c0c0c0;
+    color: #666;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 6px 18px;
+  }
+
+  .box-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+  }
+  .box-label {
+    font-size: 10px;
+    color: #aaa;
+    white-space: nowrap;
+    min-width: 48px;
+    text-align: right;
+  }
+  .box-main { flex: 1; }
+
+  /* ===== 矢印 ===== */
+  .arrow {
+    display: flex;
+    align-items: center;
+    padding: 2px 0 2px 58px;
+    font-size: 18px;
+    color: #b0b0b0;
+    line-height: 1;
+  }
+  .arrow.center {
+    padding-left: 0;
+    justify-content: center;
+  }
+  .arrow-note {
+    font-size: 11px;
+    color: #aaa;
+    margin-left: 8px;
+  }
+
+  /* ===== STEPグループ ===== */
+  .step-group {
+    width: 100%;
+    border: 1.5px solid #e0e0e0;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .step-header {
+    background: #f0f0f0;
+    padding: 6px 18px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #666;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    border-bottom: 1.5px solid #e0e0e0;
+  }
+  .step-body {
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: #ffffff;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .tag {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+    font-weight: 500;
+  }
+  .tag.ps  { background: #eef3fc; color: #1a3a6b; border: 1px solid #a0bbee; }
+  .tag.out { background: #f0faf4; color: #1a5a30; border: 1px solid #80c8a0; }
+  .tag.man { background: #fff8e6; color: #7a5000; border: 1px solid #f0c040; }
+  .tag.in  { background: #fdf0f8; color: #6a1040; border: 1px solid #e0a0c0; }
+
+  .item-text {
+    font-size: 13px;
+    color: #1a1a1a;
+  }
+  .item-sub {
+    font-size: 11px;
+    color: #888;
+    margin-left: 4px;
+  }
+
+  .mini-arrow {
+    font-size: 14px;
+    color: #c0c0c0;
+  }
+
+  /* ===== 凡例 ===== */
+  .legend {
+    margin-top: 36px;
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #666;
+  }
+  .legend-box {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1.5px solid;
+  }
+</style>
+</head>
+<body>
+
+<h1>Agent Team — 作業フロー</h1>
+<p class="subtitle">手動コピペ方式 · 3 Steps + Orchestrator</p>
+
+<div class="flow">
+
+  <!-- START -->
+  <div class="box-row">
+    <div class="box-label"></div>
+    <div class="box start box-main">▶ agent_team.ps1 を実行</div>
+  </div>
+
+  <div class="arrow"><span>↓</span><span class="arrow-note">コードスキャン → Agent自動決定</span></div>
+
+  <!-- STEP 1 -->
+  <div class="step-group">
+    <div class="step-header">STEP 1 · Transaction Agent</div>
+    <div class="step-body">
+
+      <div class="row">
+        <span class="tag ps">PS</span>
+        <span class="item-text">build_prompt.ps1</span>
+        <span class="mini-arrow">→</span>
+        <span class="tag out">OUTPUT</span>
+        <span class="item-text">step1_transaction_prompt.txt</span>
+      </div>
+
+      <div class="row">
+        <span class="tag man">手動</span>
+        <span class="item-text">Claude に貼り付けて実行</span>
+      </div>
+
+      <div class="row">
+        <span class="tag man">手動</span>
+        <span class="item-text">結果を保存</span>
+        <span class="mini-arrow">→</span>
+        <span class="tag out">OUTPUT</span>
+        <span class="item-text">step1_result.txt</span>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="arrow"><span>↓</span></div>
+
+  <!-- STEP 2 -->
+  <div class="step-group">
+    <div class="step-header">STEP 2 · Security Agent</div>
+    <div class="step-body">
+
+      <div class="row">
+        <span class="tag in">INPUT</span>
+        <span class="item-text">step1_result.txt</span>
+        <span class="item-sub">（自動で含まれる）</span>
+      </div>
+
+      <div class="row">
+        <span class="tag ps">PS</span>
+        <span class="item-text">build_prompt.ps1</span>
+        <span class="mini-arrow">→</span>
+        <span class="tag out">OUTPUT</span>
+        <span class="item-text">step2_security_prompt.txt</span>
+      </div>
+
+      <div class="row">
+        <span class="tag man">手動</span>
+        <span class="item-text">Claude に貼り付けて実行</span>
+      </div>
+
+      <div class="row">
+        <span class="tag man">手動</span>
+        <span class="item-text">結果を保存</span>
+        <span class="mini-arrow">→</span>
+        <span class="tag out">OUTPUT</span>
+        <span class="item-text">step2_result.txt</span>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="arrow"><span>↓</span></div>
+
+  <!-- STEP 3 -->
+  <div class="step-group">
+    <div class="step-header">STEP 3 · Orchestrator（統合）</div>
+    <div class="step-body">
+
+      <div class="row">
+        <span class="tag in">INPUT</span>
+        <span class="item-text">step1_result.txt + step2_result.txt</span>
+        <span class="item-sub">（自動で含まれる）</span>
+      </div>
+
+      <div class="row">
+        <span class="tag ps">PS</span>
+        <span class="item-text">build_prompt.ps1</span>
+        <span class="mini-arrow">→</span>
+        <span class="tag out">OUTPUT</span>
+        <span class="item-text">step3_orchestrator_prompt.txt</span>
+      </div>
+
+      <div class="row">
+        <span class="tag man">手動</span>
+        <span class="item-text">Claude に貼り付けて実行</span>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="arrow"><span>↓</span></div>
+
+  <!-- FINAL -->
+  <div class="box-row">
+    <div class="box-label"></div>
+    <div class="box final box-main">✅ final_report.md — 最終レポート完成</div>
+  </div>
+
+</div>
+
+<!-- 凡例 -->
+<div class="legend">
+  <div class="legend-item">
+    <div class="legend-box" style="background:#eef3fc;border-color:#a0bbee;"></div>
+    PS = PowerShell自動処理
+  </div>
+  <div class="legend-item">
+    <div class="legend-box" style="background:#fff8e6;border-color:#f0c040;"></div>
+    手動 = コピペ作業
+  </div>
+  <div class="legend-item">
+    <div class="legend-box" style="background:#f0faf4;border-color:#80c8a0;"></div>
+    OUTPUT = 生成ファイル
+  </div>
+  <div class="legend-item">
+    <div class="legend-box" style="background:#fdf0f8;border-color:#e0a0c0;"></div>
+    INPUT = 前Stepから引き継ぐ
+  </div>
+</div>
+
+</body>
+</html>
