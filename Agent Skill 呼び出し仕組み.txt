@@ -1,0 +1,201 @@
+================================================================
+Enterprise AI Review Platform
+Agent・Skill の呼び出し仕組み
+================================================================
+
+
+================================================================
+実際の呼び出し順序
+================================================================
+
+  コードスキャン（1回だけ）
+          ↓
+  risk_patterns.yaml と照合
+          ↓
+  Agent と Skill を同時に決定
+          ↓
+  build_prompt.ps1 が以下の順で組み立て
+
+    Platform
+      ↓
+    Agent（全部）
+      ↓
+    Skill（全部）
+      ↓
+    Prompt
+      ↓
+    Template
+      ↓
+    SourceCode
+
+  ※ Agent と Skill は別々に呼ばれるのではなく
+     同時に決定される
+
+
+================================================================
+ロードの2段階構造
+================================================================
+
+  【Stage 1】BaseContext（言語固定ロード）
+
+    -Language java を指定した時点で
+    以下が必ずロードされる（パターンマッチ不要）
+
+    Agents：
+      java_architect_agent
+      review_orchestrator_agent
+      security_architect_agent
+      performance_architect_agent
+
+    Skills：
+      java_skill
+      spring_boot_skill
+      security_skill
+      performance_skill
+
+
+  【Stage 2】risk_patterns.yaml（コード内容に応じて追加）
+
+    コードをスキャンして
+    マッチしたルールのAgent・Skillを追加ロード
+
+
+================================================================
+具体例1：普通のJavaコード（CRUDのみ）
+================================================================
+
+  コード例：
+    public class UserService {
+        public User findById(Long id) {
+            return userRepository.findById(id);
+        }
+        public User save(User user) {
+            return userRepository.save(user);
+        }
+    }
+
+  スキャン結果：
+    @Transactional    → 検出されない
+    RedisTemplate     → 検出されない
+    @KafkaListener    → 検出されない
+    @Async            → 検出されない
+
+  ロード結果：
+    risk_patterns.yaml → 0 rules matched
+
+    BaseContext のみロード：
+      Agents： java_architect_agent
+               review_orchestrator_agent
+               security_architect_agent
+               performance_architect_agent
+
+      Skills： java_skill
+               spring_boot_skill
+               security_skill
+               performance_skill
+
+  → シンプルなコードは最小限のロードで済む
+
+
+================================================================
+具体例2：@Transactional があるコード
+================================================================
+
+  コード例：
+    @Transactional
+    public void placeOrder(Long userId) {
+        orderRepository.save(order);
+        redisCache.evict(userId);
+    }
+
+  スキャン結果：
+    @Transactional    → 検出 ✅
+
+  ロード結果：
+    BaseContext（固定）：
+      Agents： java_architect_agent
+               review_orchestrator_agent
+               security_architect_agent
+               performance_architect_agent
+      Skills： java_skill
+               spring_boot_skill
+               security_skill
+               performance_skill
+
+    risk_patterns.yaml の transaction ルール（追加）：
+      Agents： + transaction_agent
+               + deadlock_analysis_agent
+      Skills： + transaction_skill
+               + deadlock_skill
+               + rollback_skill
+
+
+================================================================
+risk_patterns.yaml の構造
+================================================================
+
+  Agent と Skill は別々に定義されるのではなく
+  1つのルールにセットで定義されている
+
+  例：
+    - id: transaction
+      patterns:
+        - "@Transactional"       ← 検出キーワード
+      agents:
+        - transaction_agent      ← マッチ時にロードするAgent
+        - deadlock_analysis_agent
+      skills:
+        - transaction_skill      ← マッチ時にロードするSkill
+        - deadlock_skill
+        - rollback_skill
+      tier: 1
+
+  → パターンにマッチした瞬間
+    AgentとSkillが同時に決まる
+
+
+================================================================
+コードの複雑さとロード数の関係
+================================================================
+
+  シンプルなCRUD
+    → BaseContextの4Agent・4Skillのみ
+    → Promptサイズ：小
+
+  @Transactional + Redis
+    → BaseContext + transaction + redis ルール
+    → Agent：6〜7個 / Skill：8〜10個
+    → Promptサイズ：中
+
+  @Transactional + Redis + Kafka + @Async
+    → BaseContext + 複数ルール
+    → Agent：10個以上 / Skill：15個以上
+    → Promptサイズ：大
+
+  → コードが複雑なほどロード数が増える
+  → 単純なコードに余計なSkillはロードしない
+
+
+================================================================
+まとめ
+================================================================
+
+  Q：AgentとSkillは別々に呼ばれるのか？
+  A：いいえ。risk_patterns.yamlの1つのルールに
+     AgentとSkillがセットで定義されており
+     同時に決定される。
+
+  Q：コードスキャンは何回行われるのか？
+  A：1回だけ。
+     detect_context.ps1 が1回スキャンして
+     全てのAgent・Skillを一括で決定する。
+
+  Q：必ず呼ばれるAgent・Skillはあるか？
+  A：ある。
+     -Language で指定した言語の BaseContext が
+     パターンマッチに関係なく常にロードされる。
+
+
+================================================================
+END
+================================================================
