@@ -1,0 +1,201 @@
+================================================================
+Enterprise AI Review Platform
+社内勉強会 2日目 解説資料
+================================================================
+
+
+----------------------------------------------------------------
+タイムライン（30分）
+----------------------------------------------------------------
+
+ 0:00 - 10:00   仕組みの説明（Risk-Based Dynamic Loading）
+10:00 - 25:00   参加者全員で実際に動かしてみる
+25:00 - 30:00   質疑応答
+
+
+================================================================
+① 仕組みの説明（10分）
+================================================================
+
+【フォルダ構成】
+
+  enterprise-ai-review-platform/
+  ├── ai-review/
+  │   ├── platform/     AIの思考基盤
+  │   ├── agents/       役割別エージェント定義
+  │   ├── skills/       専門知識ルール
+  │   ├── prompts/      タスク定義
+  │   ├── templates/    出力フォーマット
+  │   └── routing/      動的ロードルール
+  ├── source-code/
+  │   ├── new/          レビュー対象コード
+  │   └── old/          修正前コード（diff時のみ）
+  ├── output/
+  │   ├── final_review_prompt.txt   Claudeに貼り付けるPrompt
+  │   └── final_report.md           実行サマリ
+  └── scripts/
+      ├── review.ps1                エントリポイント
+      ├── detect_context.ps1        コンテキスト検出
+      └── build_prompt.ps1          Prompt組み立て
+
+
+【Risk-Based Dynamic Loading とは】
+
+  コードの内容に応じて
+  必要なSkillだけを自動でロードする仕組み
+
+  例：
+    @Transactional を検出
+      → transaction_skill
+      → deadlock_skill
+      → rollback_skill を自動ロード
+
+    RedisTemplate を検出
+      → redis_skill を自動ロード
+
+    @KafkaListener を検出
+      → kafka_skill を自動ロード
+
+  → 関係ないSkillはロードしない
+  → Token節約・レビュー品質の安定化
+
+
+【スクリプトの役割分担】
+
+  review.ps1
+    → エントリポイント
+    → 引数を受け取って全体を制御するだけ
+
+  detect_context.ps1
+    → コードをスキャン
+    → risk_patterns.yaml のルールと照合
+    → 必要なAgent・Skillを決定
+
+  build_prompt.ps1
+    → Platform + Agent + Skill + Template + SourceCode
+    → 全部を1つのPromptに統合して出力
+
+
+================================================================
+② 参加者全員で実際に動かしてみる（15分）
+================================================================
+
+【事前準備（参加者各自）】
+
+  1. enterprise-ai-review-platform フォルダを展開
+  2. PowerShell を開く
+  3. プロジェクトルートに移動
+     cd C:\...\enterprise-ai-review-platform
+
+  実行ポリシー設定（初回のみ）：
+  Set-ExecutionPolicy -Scope CurrentUser Bypass
+
+
+【手順】
+
+  STEP 1：サンプルコードを確認（2分）
+    source-code\new\ の中のJavaファイルを確認する
+    どんなリスクが仕込まれているか予想してみる
+
+  STEP 2：review.ps1 を実行（3分）
+    .\scripts\review.ps1 -Language java -Mode new-review
+
+    正常に動いた場合のコンソール出力：
+      [INFO] Enterprise AI Review Platform started
+      [INFO] Source collected: X.X KB
+      [OK]   Detection done: X rules matched
+      [OK]   Prompt generated: output\final_review_prompt.txt
+
+  STEP 3：生成ファイルを確認（2分）
+    output\final_report.md を開く
+      → どのAgent・Skillがロードされたか確認
+
+  STEP 4：Claudeに貼り付け（3分）
+    output\final_review_prompt.txt を全文コピー
+    Claude（claude.ai）に貼り付けて送信
+
+  STEP 5：結果を読む（5分）
+    P0・P1の検出内容を一緒に読む
+    「なぜこれが危険か」を確認する
+
+
+【確認ポイント】
+
+  ・どのSkillが自動でロードされたか
+  ・P0として何が検出されたか
+  ・影響範囲・修正推奨が具体的に出ているか
+
+
+================================================================
+③ 質疑応答（5分）
+================================================================
+
+
+================================================================
+想定される質問と回答
+================================================================
+
+
+Q1. 自分のコードで試したい場合はどうすればいい？
+----------------------------------------------------------------
+
+  source-code\new\ の中身を
+  自分のコードに置き換えるだけです。
+
+  その後同じコマンドを実行してください：
+  .\scripts\review.ps1 -Language java -Mode new-review
+
+  C# の場合：
+  .\scripts\review.ps1 -Language csharp -Mode new-review
+
+
+Q2. diff-review はどう使うの？
+----------------------------------------------------------------
+
+  修正前のコードを source-code\old\ に
+  修正後のコードを source-code\new\ に置いて
+
+  .\scripts\review.ps1 -Language java -Mode diff-review
+
+  修正によって新たに生まれたリスクと
+  回帰リスクを分析します。
+
+
+Q3. final_review_prompt.txt のサイズが大きすぎる場合は？
+----------------------------------------------------------------
+
+  Claudeのコンテキスト上限（約15万文字）を
+  超える場合は以下を検討してください：
+
+  ・レビュー対象ファイルを絞る
+  ・skill_routing_rules.yaml の
+    max_skill_count を小さくする
+
+
+Q4. 結果はどこに保存すればいい？
+----------------------------------------------------------------
+
+  現状は自動保存の仕組みはありません。
+  Claudeの出力を手動でコピーして保存してください。
+
+  推奨：
+  output\agent_outputs\ フォルダに
+  日付_ファイル名.md として保存する運用を推奨します。
+
+
+Q5. 複数ファイルを一度にレビューできる？
+----------------------------------------------------------------
+
+  できます。
+
+  source-code\new\ に
+  複数ファイルを置けば全て対象になります。
+
+  ただしファイルが多すぎると
+  Promptが大きくなりすぎるため
+  関連するファイルに絞ることを推奨します。
+
+
+================================================================
+END
+================================================================
