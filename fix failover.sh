@@ -27,11 +27,21 @@ readonly LOCK_FILE="/var/run/fix_failover.lock"
 readonly ALERT_MAIL="ops-team@example.com"
 # readonly SLACK_WEBHOOK="https://hooks.slack.com/services/xxx/yyy/zzz"
 
-# Hinemosジョブ設定
-# ※ HINEMOS_CLI_CMD: 実際のCLIパスに変更してください
-readonly HINEMOS_CLI_CMD="/path/to/hinemos_cli"   # TODO: 実際のパスに変更
-readonly HINEMOS_JOBUNIT_ID="FIX_JOB_UNIT"        # TODO: 実際のジョブユニットIDに変更
-readonly HINEMOS_JOB_ID="FIX_MONITOR_JOB"         # TODO: 実際のジョブIDに変更
+# Hinemos 既存shスクリプトパス（実際のパスに変更してください）
+readonly SH_MONITOR_STOP="/path/to/hinemos_monitor_stop.sh"   # TODO: 監視停止shのパス
+readonly SH_MONITOR_START="/path/to/hinemos_monitor_start.sh" # TODO: 監視再開shのパス
+readonly SH_JOB_STOP="/path/to/hinemos_job_stop.sh"           # TODO: ジョブ停止shのパス
+readonly SH_JOB_START="/path/to/hinemos_job_start.sh"         # TODO: ジョブ再開shのパス
+
+# 監視ID（1つで3ジョブを同時監視）
+readonly HINEMOS_MONITOR_ID="FIX_MONITOR_01"  # TODO: 実際の監視IDに変更
+
+# 3つのジョブID（それぞれ個別に操作）
+readonly HINEMOS_JOB_IDS=(
+    "FIX_JOB_01"      # TODO: 実際のジョブID①に変更
+    "FIX_JOB_02"      # TODO: 実際のジョブID②に変更
+    "FIX_JOB_03"      # TODO: 実際のジョブID③に変更
+)
 
 # セッションファイルパス（3セッション分）
 readonly SESSION_FILES=(
@@ -99,45 +109,48 @@ release_lock() {
 trap 'release_lock; log_info "スクリプト終了"' EXIT
 
 # -----------------------------------------------------------------------------
-# Hinemos ジョブ制御
+# Hinemos 制御（既存shスクリプトを呼び出し）
 # -----------------------------------------------------------------------------
-hinemos_stop_jobs() {
-    log_info "Hinemosジョブ停止開始: ${HINEMOS_JOB_ID}"
-
-    # CLIコマンドの存在確認
-    if [ ! -x "${HINEMOS_CLI_CMD}" ]; then
-        log_error "Hinemos CLIが見つかりません: ${HINEMOS_CLI_CMD}"
+_check_sh() {
+    local sh_path="$1"
+    if [ ! -x "${sh_path}" ]; then
+        log_error "スクリプトが見つかりません: ${sh_path}"
         exit 1
     fi
+}
 
-    # ジョブ停止実行
-    # TODO: CLIパスが確定したら、以下のコメントを外して正しいコマンド構文に修正してください
-    # 例1（コマンド構文が "stop jobunit job" 形式の場合）:
-    #   "${HINEMOS_CLI_CMD}" stop "${HINEMOS_JOBUNIT_ID}" "${HINEMOS_JOB_ID}"
-    # 例2（サブコマンド形式の場合）:
-    #   "${HINEMOS_CLI_CMD}" job stop --unit "${HINEMOS_JOBUNIT_ID}" --job "${HINEMOS_JOB_ID}"
-    log_warn "TODO: Hinemos CLIパスを設定してください（HINEMOS_CLI_CMD）"
+hinemos_stop_monitor() {
+    _check_sh "${SH_MONITOR_STOP}"
+    log_info "Hinemos 監視停止: ${HINEMOS_MONITOR_ID}"
+    "${SH_MONITOR_STOP}" "${HINEMOS_MONITOR_ID}"
+    log_info "Hinemos 監視停止完了"
+}
 
-    log_info "Hinemosジョブ停止完了"
+hinemos_stop_jobs() {
+    _check_sh "${SH_JOB_STOP}"
+    log_info "Hinemos ジョブ停止開始（3件）"
+    for job_id in "${HINEMOS_JOB_IDS[@]}"; do
+        log_info "  ジョブ停止: ${job_id}"
+        "${SH_JOB_STOP}" "${job_id}"
+    done
+    log_info "Hinemos ジョブ停止完了"
 }
 
 hinemos_start_jobs() {
-    log_info "Hinemosジョブ再開開始: ${HINEMOS_JOB_ID}"
+    _check_sh "${SH_JOB_START}"
+    log_info "Hinemos ジョブ再開開始（3件）"
+    for job_id in "${HINEMOS_JOB_IDS[@]}"; do
+        log_info "  ジョブ再開: ${job_id}"
+        "${SH_JOB_START}" "${job_id}"
+    done
+    log_info "Hinemos ジョブ再開完了"
+}
 
-    if [ ! -x "${HINEMOS_CLI_CMD}" ]; then
-        log_error "Hinemos CLIが見つかりません: ${HINEMOS_CLI_CMD}"
-        exit 1
-    fi
-
-    # ジョブ再開実行
-    # TODO: CLIパスが確定したら、以下のコメントを外して正しいコマンド構文に修正してください
-    # 例1:
-    #   "${HINEMOS_CLI_CMD}" start "${HINEMOS_JOBUNIT_ID}" "${HINEMOS_JOB_ID}"
-    # 例2:
-    #   "${HINEMOS_CLI_CMD}" job start --unit "${HINEMOS_JOBUNIT_ID}" --job "${HINEMOS_JOB_ID}"
-    log_warn "TODO: Hinemos CLIパスを設定してください（HINEMOS_CLI_CMD）"
-
-    log_info "Hinemosジョブ再開完了"
+hinemos_start_monitor() {
+    _check_sh "${SH_MONITOR_START}"
+    log_info "Hinemos 監視再開: ${HINEMOS_MONITOR_ID}"
+    "${SH_MONITOR_START}" "${HINEMOS_MONITOR_ID}"
+    log_info "Hinemos 監視再開完了"
 }
 
 # -----------------------------------------------------------------------------
@@ -239,11 +252,13 @@ check_sessions_with_retry() {
 do_fallback_to_main() {
     log_warn "========== フェイルバック開始（副系→正系） =========="
 
-    hinemos_stop_jobs
+    hinemos_stop_monitor    # ①監視停止
+    hinemos_stop_jobs       # ②ジョブ停止
     fix_engine_stop
     switch_to_main
-    fix_engine_start       # 改善点④：起動ステップ追加
-    hinemos_start_jobs     # 改善点⑤：ジョブ再開ステップ追加
+    fix_engine_start
+    hinemos_start_jobs      # ③ジョブ再開
+    hinemos_start_monitor   # ④監視再開
 
     log_error "正系・副系ともに接続不可。STへ問い合わせが必要です。"
     send_alert \
@@ -289,39 +304,45 @@ main() {
         "$(date): セッションエラーが継続しています。正系→副系切替を開始します。\nログ: ${LOG_FILE}"
 
     # --------------------------------------------------
-    # ステップ④⑤：ジョブ停止・エンジン停止
+    # ステップ④⑤：監視停止→ジョブ停止→エンジン停止
     # --------------------------------------------------
-    log_info "ステップ④：FIX系ジョブ停止"
+    log_info "ステップ④：Hinemos 監視停止（3件）"
+    hinemos_stop_monitor
+
+    log_info "ステップ⑤：FIX系ジョブ停止（3件）"
     hinemos_stop_jobs
 
-    log_info "ステップ⑤：FIXエンジン停止"
+    log_info "ステップ⑥：FIXエンジン停止"
     fix_engine_stop
 
     # --------------------------------------------------
-    # ステップ⑥：設定ファイル切替（正系→副系）
+    # ステップ⑦：設定ファイル切替（正系→副系）
     # --------------------------------------------------
-    log_info "ステップ⑥：設定ファイル切替（正系→副系）"
+    log_info "ステップ⑦：設定ファイル切替（正系→副系）"
     switch_to_sub
 
     # --------------------------------------------------
-    # ステップ⑦⑧：エンジン起動・ジョブ再開
+    # ステップ⑧⑨⑩：エンジン起動→ジョブ再開→監視再開
     # --------------------------------------------------
-    log_info "ステップ⑦：FIXエンジン起動"
+    log_info "ステップ⑧：FIXエンジン起動"
     fix_engine_start
 
-    log_info "ステップ⑧：FIX系ジョブ再開"
+    log_info "ステップ⑨：FIX系ジョブ再開（3件）"
     hinemos_start_jobs
 
+    log_info "ステップ⑩：Hinemos 監視再開（3件）"
+    hinemos_start_monitor
+
     # --------------------------------------------------
-    # ステップ⑨：セッション接続ファイル配置（副系）
+    # ステップ⑪：セッション接続ファイル配置（副系）
     # --------------------------------------------------
-    log_info "ステップ⑨：セッション接続ファイル配置（副系向け）"
+    log_info "ステップ⑪：セッション接続ファイル配置（副系向け）"
     place_session_files "(副系切替後)"
 
     # --------------------------------------------------
-    # ステップ⑩：セッション接続状況確認
+    # ステップ⑫：セッション接続状況確認
     # --------------------------------------------------
-    log_info "ステップ⑩：セッション接続状況確認（副系）"
+    log_info "ステップ⑫：セッション接続状況確認（副系）"
     if check_sessions_with_retry; then
         log_info "副系セッション正常接続確認。フェイルオーバー完了。"
         send_alert \
