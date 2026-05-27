@@ -186,6 +186,17 @@ switch_to_main() {
     log_info "切替完了: ${TCPIP_LINK} -> ${TCPIP_MAIN}"
 }
 
+get_current_line() {
+    # 現在の稼働系を確認（symlinkのリンク先で判定）
+    local current
+    current=$(readlink "${TCPIP_LINK}" 2>/dev/null || echo "unknown")
+    case "${current}" in
+        *tcpip_main*) echo "main" ;;
+        *tcpip_sub*)  echo "sub"  ;;
+        *)            echo "unknown" ;;
+    esac
+}
+
 # -----------------------------------------------------------------------------
 # セッション制御
 # -----------------------------------------------------------------------------
@@ -247,25 +258,40 @@ check_sessions_with_retry() {
 }
 
 # -----------------------------------------------------------------------------
-# フェイルバック処理（副系→正系へ戻す）
+# 切替処理共通関数
 # -----------------------------------------------------------------------------
-do_fallback_to_main() {
-    log_warn "========== フェイルバック開始（副系→正系） =========="
+do_switch() {
+    local target="$1"   # "sub" or "main"
+    local label="$2"
 
-    hinemos_stop_monitor    # ①監視停止
-    hinemos_stop_jobs       # ②ジョブ停止
+    log_info "========== 切替処理開始: ${label} =========="
+
+    hinemos_stop_monitor
+    hinemos_stop_jobs
     fix_engine_stop
-    switch_to_main
-    fix_engine_start
-    hinemos_start_jobs      # ③ジョブ再開
-    hinemos_start_monitor   # ④監視再開
 
+    if [ "${target}" = "sub" ]; then
+        switch_to_sub
+    else
+        switch_to_main
+    fi
+
+    fix_engine_start
+    hinemos_start_jobs
+    hinemos_start_monitor
+
+    log_info "========== 切替処理完了: ${label} =========="
+}
+
+do_final_fallback() {
+    # 正系・副系ともに失敗 → 正系へ戻してアラート
+    log_warn "========== 最終フェイルバック（正系へ戻す） =========="
+    do_switch "main" "副系→正系"
     log_error "正系・副系ともに接続不可。STへ問い合わせが必要です。"
     send_alert \
         "[緊急] FIX Engine 正系・副系ともに接続不可" \
         "$(date): 正系・副系ともに接続できませんでした。\nログ: ${LOG_FILE}\nSTへの問い合わせを実施してください。"
-
-    log_warn "========== フェイルバック完了 =========="
+    log_warn "========== 最終フェイルバック完了 =========="
 }
 
 # -----------------------------------------------------------------------------
@@ -278,10 +304,17 @@ main() {
     acquire_lock
 
     # --------------------------------------------------
-    # ステップ①：エラー検知はスクリプト呼び出し元（Hinemos監視）で実施済み想定
-    # 本スクリプト起動＝エラー検知済みとして処理開始
+    # ステップ①：現在の稼働系を確認
     # --------------------------------------------------
-    log_info "ステップ①：エラー検知済み（閾値: ${ERROR_THRESHOLD}回 / ${ERROR_TIME_WINDOW}秒以内）"
+    local current_line
+    current_line=$(get_current_line)
+    log_info "ステップ①：現在の稼働系 = ${current_line}"
+
+    if [ "${current_line}" = "unknown" ]; then
+        log_error "稼働系が不明です。symlinkを確認してください: ${TCPIP_LINK}"
+        send_alert "[緊急] FIX Engine 稼働系不明" "$(date): symlinkの確認が必要です。\nログ: ${LOG_FILE}"
+        exit 1
+    fi
 
     # --------------------------------------------------
     # ステップ②：セッション接続ファイル配置（再接続試行）
@@ -294,68 +327,71 @@ main() {
     # --------------------------------------------------
     log_info "ステップ③：セッション接続状況確認"
     if check_sessions_with_retry; then
-        log_info "セッション正常回復。処理終了（フェイルオーバー不要）。"
+        log_info "セッション正常回復。処理終了（切替不要）。"
         exit 0
     fi
 
-    log_warn "セッションエラー継続。フェイルオーバー処理へ移行。"
-    send_alert \
-        "[警告] FIX Engine フェイルオーバー開始" \
-        "$(date): セッションエラーが継続しています。正系→副系切替を開始します。\nログ: ${LOG_FILE}"
+    log_warn "セッションエラー継続。切替処理へ移行。"
 
     # --------------------------------------------------
-    # ステップ④⑤：監視停止→ジョブ停止→エンジン停止
+    # ステップ④：現在の稼働系に応じて切替先を決定
     # --------------------------------------------------
-    log_info "ステップ④：Hinemos 監視停止（3件）"
-    hinemos_stop_monitor
-
-    log_info "ステップ⑤：FIX系ジョブ停止（3件）"
-    hinemos_stop_jobs
-
-    log_info "ステップ⑥：FIXエンジン停止"
-    fix_engine_stop
-
-    # --------------------------------------------------
-    # ステップ⑦：設定ファイル切替（正系→副系）
-    # --------------------------------------------------
-    log_info "ステップ⑦：設定ファイル切替（正系→副系）"
-    switch_to_sub
-
-    # --------------------------------------------------
-    # ステップ⑧⑨⑩：エンジン起動→ジョブ再開→監視再開
-    # --------------------------------------------------
-    log_info "ステップ⑧：FIXエンジン起動"
-    fix_engine_start
-
-    log_info "ステップ⑨：FIX系ジョブ再開（3件）"
-    hinemos_start_jobs
-
-    log_info "ステップ⑩：Hinemos 監視再開（3件）"
-    hinemos_start_monitor
-
-    # --------------------------------------------------
-    # ステップ⑪：セッション接続ファイル配置（副系）
-    # --------------------------------------------------
-    log_info "ステップ⑪：セッション接続ファイル配置（副系向け）"
-    place_session_files "(副系切替後)"
-
-    # --------------------------------------------------
-    # ステップ⑫：セッション接続状況確認
-    # --------------------------------------------------
-    log_info "ステップ⑫：セッション接続状況確認（副系）"
-    if check_sessions_with_retry; then
-        log_info "副系セッション正常接続確認。フェイルオーバー完了。"
+    if [ "${current_line}" = "main" ]; then
+        # 正系稼働中 → 副系へ切替
+        log_info "ステップ④：正系稼働中のため、副系へ切替"
         send_alert \
-            "[復旧] FIX Engine 副系切替完了" \
-            "$(date): 正系→副系切替が正常に完了しました。\nログ: ${LOG_FILE}"
-        log_info "========== FIX自動フェイルオーバー正常終了 =========="
-        exit 0
-    fi
+            "[警告] FIX Engine 副系へ切替開始" \
+            "$(date): 正系でエラー継続。副系への切替を開始します。\nログ: ${LOG_FILE}"
 
-    # --------------------------------------------------
-    # 副系も失敗：フェイルバック（副系→正系）
-    # --------------------------------------------------
-    do_fallback_to_main
+        do_switch "sub" "正系→副系"
+
+        # 副系接続確認
+        log_info "ステップ⑤：セッション接続ファイル配置（副系）"
+        place_session_files "(副系切替後)"
+
+        log_info "ステップ⑥：セッション接続状況確認（副系）"
+        if check_sessions_with_retry; then
+            log_info "副系セッション正常。切替完了。"
+            send_alert \
+                "[復旧] FIX Engine 副系切替完了" \
+                "$(date): 正系→副系切替が正常に完了しました。\nログ: ${LOG_FILE}"
+            log_info "========== FIX自動フェイルオーバー正常終了 =========="
+            exit 0
+        fi
+
+        # 副系も失敗 → 正系へフェイルバック
+        log_warn "副系も接続不可。正系へフェイルバックします。"
+        do_final_fallback
+
+    else
+        # 副系稼働中 → 正系へ切替
+        log_info "ステップ④：副系稼働中のため、正系へ切替"
+        send_alert \
+            "[警告] FIX Engine 正系へ切替開始" \
+            "$(date): 副系でエラー継続。正系への切替を開始します。\nログ: ${LOG_FILE}"
+
+        do_switch "main" "副系→正系"
+
+        # 正系接続確認
+        log_info "ステップ⑤：セッション接続ファイル配置（正系）"
+        place_session_files "(正系切替後)"
+
+        log_info "ステップ⑥：セッション接続状況確認（正系）"
+        if check_sessions_with_retry; then
+            log_info "正系セッション正常。切替完了。"
+            send_alert \
+                "[復旧] FIX Engine 正系切替完了" \
+                "$(date): 副系→正系切替が正常に完了しました。\nログ: ${LOG_FILE}"
+            log_info "========== FIX自動フェイルオーバー正常終了 =========="
+            exit 0
+        fi
+
+        # 正系も失敗 → 正系のままアラート
+        log_error "正系・副系ともに接続不可。STへ問い合わせが必要です。"
+        send_alert \
+            "[緊急] FIX Engine 正系・副系ともに接続不可" \
+            "$(date): 正系・副系ともに接続できませんでした。\nログ: ${LOG_FILE}\nSTへの問い合わせを実施してください。"
+    fi
 
     log_info "========== FIX自動フェイルオーバー終了（要対応） =========="
     exit 2  # 異常終了コード（STへ問い合わせ必要）
