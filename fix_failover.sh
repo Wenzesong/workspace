@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # FIX Engine 自動フェイルオーバースクリプト
-# 正系→副系切替、および副系→正系フェイルバック
+# 正系⇔副系を接続可能になるまで繰り返し切り替える
 # =============================================================================
 
 set -euo pipefail
@@ -16,18 +16,14 @@ readonly TCPIP_LINK="/opt/fix/env/line/tcpip"
 readonly SESSION_CONNECT_WAIT=30         # セッション接続待機時間（秒）
 readonly SESSION_RETRY_COUNT=3           # セッション確認リトライ回数
 readonly SESSION_RETRY_INTERVAL=30       # セッション確認リトライ間隔（秒）
-readonly HINEMOS_CMD_TIMEOUT=60          # Hinemos・FIXエンジン制御コマンドタイムアウト（秒）
+readonly CTRL_CMD_TIMEOUT=60             # FIXエンジン制御・セッション接続コマンドタイムアウト（秒）
+readonly SWITCH_CYCLE_INTERVAL=30        # 正系⇔副系 切替サイクル間の待機時間（秒）
 
 readonly LOG_FILE="/var/log/fix_failover/fix_failover_$(date +%Y%m%d_%H%M%S).log"
 readonly LOCK_FILE="/var/run/fix_failover.lock"
 
 # 制御スクリプトパス（引数は各関数内で指定）
-readonly SH_MONITOR_CTRL="/var/script/inf/bin/i_hin_ctrlmonitor_ids.sh"
-readonly SH_JOB_CTRL="/var/script/inf/bin/i_jar_ctrl.sh"
 readonly SH_FIX_CTRL="/var/script/inf/bin/i_fix_ctrl.sh"
-
-# FIXセッション監視ID
-readonly HINEMOS_MONITOR_ID="S0B1_DEV_FXDS_FIX_SESSION" 
 
 # FIXセッション接続要求（スクリプトパス + 引数）
 readonly -a FIX_CONNECT_STR=("/var/script/ap1/APLJB_FixConnect.sh" "jbstr0001")
@@ -101,7 +97,7 @@ release_lock() {
 trap 'release_lock; log_info "スクリプト終了"' EXIT
 
 # -----------------------------------------------------------------------------
-# Hinemos 制御（既存shスクリプトを呼び出し）
+# スクリプト存在・実行可否チェック
 # -----------------------------------------------------------------------------
 _check_sh() {
     local sh_path="$1"
@@ -111,54 +107,14 @@ _check_sh() {
     fi
 }
 
-hinemos_stop_monitor() {
-    _check_sh "${SH_MONITOR_CTRL}" || return 1
-    log_info "Hinemos 監視停止: ${HINEMOS_MONITOR_ID}"
-    timeout "${HINEMOS_CMD_TIMEOUT}" "${SH_MONITOR_CTRL}" stop "${HINEMOS_MONITOR_ID}" || {
-        log_error "Hinemos 監視停止が失敗またはタイムアウト（${HINEMOS_CMD_TIMEOUT}秒）"
-        return 1
-    }
-    log_info "Hinemos 監視停止完了"
-}
-
-hinemos_stop_jobs() {
-    _check_sh "${SH_JOB_CTRL}" || return 1
-    log_info "Hinemos ジョブ停止開始"
-    timeout "${HINEMOS_CMD_TIMEOUT}" "${SH_JOB_CTRL}" stop FIX || {
-        log_error "Hinemos ジョブ停止が失敗またはタイムアウト（${HINEMOS_CMD_TIMEOUT}秒）"
-        return 1
-    }
-    log_info "Hinemos ジョブ停止完了"
-}
-
-hinemos_start_jobs() {
-    _check_sh "${SH_JOB_CTRL}" || return 1
-    log_info "Hinemos ジョブ再開開始"
-    timeout "${HINEMOS_CMD_TIMEOUT}" "${SH_JOB_CTRL}" start FIX || {
-        log_error "Hinemos ジョブ再開が失敗またはタイムアウト（${HINEMOS_CMD_TIMEOUT}秒）"
-        return 1
-    }
-    log_info "Hinemos ジョブ再開完了"
-}
-
-hinemos_start_monitor() {
-    _check_sh "${SH_MONITOR_CTRL}" || return 1
-    log_info "Hinemos 監視再開: ${HINEMOS_MONITOR_ID}"
-    timeout "${HINEMOS_CMD_TIMEOUT}" "${SH_MONITOR_CTRL}" start "${HINEMOS_MONITOR_ID}" || {
-        log_error "Hinemos 監視再開が失敗またはタイムアウト（${HINEMOS_CMD_TIMEOUT}秒）"
-        return 1
-    }
-    log_info "Hinemos 監視再開完了"
-}
-
 # -----------------------------------------------------------------------------
 # FIXエンジン制御
 # -----------------------------------------------------------------------------
 fix_engine_stop() {
     _check_sh "${SH_FIX_CTRL}" || return 1
     log_info "FIXエンジン停止開始"
-    timeout "${HINEMOS_CMD_TIMEOUT}" "${SH_FIX_CTRL}" stop || {
-        log_error "FIXエンジン停止が失敗またはタイムアウト（${HINEMOS_CMD_TIMEOUT}秒）"
+    timeout "${CTRL_CMD_TIMEOUT}" "${SH_FIX_CTRL}" stop || {
+        log_error "FIXエンジン停止が失敗またはタイムアウト（${CTRL_CMD_TIMEOUT}秒）"
         return 1
     }
     log_info "FIXエンジン停止完了"
@@ -167,8 +123,8 @@ fix_engine_stop() {
 fix_engine_start() {
     _check_sh "${SH_FIX_CTRL}" || return 1
     log_info "FIXエンジン起動開始"
-    timeout "${HINEMOS_CMD_TIMEOUT}" "${SH_FIX_CTRL}" start || {
-        log_error "FIXエンジン起動が失敗またはタイムアウト（${HINEMOS_CMD_TIMEOUT}秒）"
+    timeout "${CTRL_CMD_TIMEOUT}" "${SH_FIX_CTRL}" start || {
+        log_error "FIXエンジン起動が失敗またはタイムアウト（${CTRL_CMD_TIMEOUT}秒）"
         return 1
     }
     log_info "FIXエンジン起動完了"
@@ -229,11 +185,11 @@ place_session_files() {
     _check_sh "${FIX_CONNECT_STR[0]}" || log_warn "  STR スクリプトが見つかりません: ${FIX_CONNECT_STR[0]}"
     _check_sh "${FIX_CONNECT_ORD[0]}" || log_warn "  ORD スクリプトが見つかりません: ${FIX_CONNECT_ORD[0]}"
     _check_sh "${FIX_CONNECT_STP[0]}" || log_warn "  STP スクリプトが見つかりません: ${FIX_CONNECT_STP[0]}"
-    timeout "${HINEMOS_CMD_TIMEOUT}" "${FIX_CONNECT_STR[@]}" 2>>"${LOG_FILE}" \
+    timeout "${CTRL_CMD_TIMEOUT}" "${FIX_CONNECT_STR[@]}" 2>>"${LOG_FILE}" \
         || log_warn "  STR セッション接続要求失敗"
-    timeout "${HINEMOS_CMD_TIMEOUT}" "${FIX_CONNECT_ORD[@]}" 2>>"${LOG_FILE}" \
+    timeout "${CTRL_CMD_TIMEOUT}" "${FIX_CONNECT_ORD[@]}" 2>>"${LOG_FILE}" \
         || log_warn "  ORD セッション接続要求失敗"
-    timeout "${HINEMOS_CMD_TIMEOUT}" "${FIX_CONNECT_STP[@]}" 2>>"${LOG_FILE}" \
+    timeout "${CTRL_CMD_TIMEOUT}" "${FIX_CONNECT_STP[@]}" 2>>"${LOG_FILE}" \
         || log_warn "  STP セッション接続要求失敗"
     log_info "セッション接続要求完了。${SESSION_CONNECT_WAIT}秒待機..."
     sleep "${SESSION_CONNECT_WAIT}"
@@ -297,32 +253,26 @@ check_sessions_with_retry() {
 }
 
 # -----------------------------------------------------------------------------
-# フェイルバック処理（副系→正系へ戻す）
-# 戻り値: 0=正系復旧成功, 1=制御コマンド失敗 または 正系でも接続不可
+# 系切替＋セッション確認（1サイクル）
+# 引数: target = "main" または "sub"
+# 戻り値: 0=対象系で接続確認, 1=接続不可
+# 異常終了させないため、制御コマンドの失敗は warn のみで継続する
 # -----------------------------------------------------------------------------
-do_fallback_to_main() {
-    log_warn "========== フェイルバック開始（副系→正系） =========="
+switch_and_verify() {
+    local target="$1"
 
-    hinemos_stop_monitor    || return 1  # ①監視停止
-    hinemos_stop_jobs       || return 1  # ②ジョブ停止
-    fix_engine_stop         || return 1
-    switch_to_main          || return 1
-    fix_engine_start        || return 1
-    hinemos_start_jobs      || return 1  # ③ジョブ再開
-    hinemos_start_monitor   || return 1  # ④監視再開
+    fix_engine_stop || log_warn "FIXエンジン停止に失敗しましたが処理を継続します。"
 
-    # フェイルバック後のセッション確認（メインフェイルオーバーと同様の手順）
-    place_session_files "(正系フェイルバック後)"
-    if check_sessions_with_retry; then
-        log_info "正系セッション正常接続確認。フェイルバック完了。"
-        log_warn "========== フェイルバック完了（正系稼働中） =========="
-        return 0
+    if [ "${target}" = "sub" ]; then
+        switch_to_sub || log_warn "副系への切替に失敗しましたが処理を継続します。"
+    else
+        switch_to_main || log_warn "正系への切替に失敗しましたが処理を継続します。"
     fi
 
-    # 正系でも接続不可：STへ問い合わせが必要
-    log_error "正系・副系ともに接続不可。STへ問い合わせが必要です。"
-    log_warn "========== フェイルバック完了（要対応） =========="
-    return 1
+    fix_engine_start || log_warn "FIXエンジン起動に失敗しましたが処理を継続します。"
+
+    place_session_files "(${target}切替後)"
+    check_sessions_with_retry
 }
 
 # -----------------------------------------------------------------------------
@@ -356,89 +306,39 @@ main() {
         exit 0
     fi
 
-    log_warn "セッションエラー継続。フェイルオーバー処理へ移行。"
+    log_warn "セッションエラー継続。系切替処理へ移行。"
 
     # --------------------------------------------------
-    # 副系スタートの場合：フェイルオーバーをスキップして正系へ直接フェイルバック
+    # ステップ4：接続可能になるまで正系⇔副系を繰り返し切替
+    # 現稼働系の反対系へ切り替えてセッション確認。
+    # 成功するまで無限に切替を継続する（異常終了しない）。
     # --------------------------------------------------
-    if [ "$(get_current_line)" = "sub" ]; then
-        log_warn "副系稼働中にセッションエラーを検知。正系へフェイルバックします。"
-        if do_fallback_to_main; then
-            log_info "========== FIX自動フェイルオーバー終了（正系フェイルバック完了） =========="
+    local cycle=0
+    while true; do
+        cycle=$((cycle + 1))
+
+        local current target
+        current=$(get_current_line)
+        if [ "${current}" = "main" ]; then
+            target="sub"
+        elif [ "${current}" = "sub" ]; then
+            target="main"
+        else
+            # 稼働系不明時は副系へ切替を試みる
+            log_warn "稼働系が不明です（${current}）。副系への切替を試みます。"
+            target="sub"
+        fi
+
+        log_warn "========== 切替サイクル ${cycle}: ${current} → ${target} =========="
+        if switch_and_verify "${target}"; then
+            log_info "${target}セッション正常接続確認。フェイルオーバー完了。"
+            log_info "========== FIX自動フェイルオーバー正常終了（${target}稼働中） =========="
             exit 0
         fi
-        log_info "========== FIX自動フェイルオーバー終了（要対応） =========="
-        exit 2
-    fi
 
-    # --------------------------------------------------
-    # ステップ4：Hinemos 監視停止
-    # --------------------------------------------------
-    log_info "ステップ4：Hinemos 監視停止"
-    hinemos_stop_monitor
-
-    # --------------------------------------------------
-    # ステップ5：FIX系ジョブ停止（3件）
-    # --------------------------------------------------
-    log_info "ステップ5：FIX系ジョブ停止（3件）"
-    hinemos_stop_jobs
-
-    # --------------------------------------------------
-    # ステップ6：FIXエンジン停止
-    # --------------------------------------------------
-    log_info "ステップ6：FIXエンジン停止"
-    fix_engine_stop
-
-    # --------------------------------------------------
-    # ステップ7：設定ファイル切替（正系→副系）
-    # --------------------------------------------------
-    log_info "ステップ7：設定ファイル切替（正系→副系）"
-    switch_to_sub
-
-    # --------------------------------------------------
-    # ステップ8：FIXエンジン起動
-    # --------------------------------------------------
-    log_info "ステップ8：FIXエンジン起動"
-    fix_engine_start
-
-    # --------------------------------------------------
-    # ステップ9：FIX系ジョブ再開（3件）
-    # --------------------------------------------------
-    log_info "ステップ9：FIX系ジョブ再開（3件）"
-    hinemos_start_jobs
-
-    # --------------------------------------------------
-    # ステップ10：Hinemos 監視再開
-    # --------------------------------------------------
-    log_info "ステップ10：Hinemos 監視再開"
-    hinemos_start_monitor
-
-    # --------------------------------------------------
-    # ステップ11：セッション接続ファイル配置（副系）
-    # --------------------------------------------------
-    log_info "ステップ11：セッション接続ファイル配置（副系向け）"
-    place_session_files "(副系切替後)"
-
-    # --------------------------------------------------
-    # ステップ12：セッション接続状況確認
-    # --------------------------------------------------
-    log_info "ステップ12：セッション接続状況確認（副系）"
-    if check_sessions_with_retry; then
-        log_info "副系セッション正常接続確認。フェイルオーバー完了。"
-        log_info "========== FIX自動フェイルオーバー正常終了 =========="
-        exit 0
-    fi
-
-    # --------------------------------------------------
-    # 副系も失敗：フェイルバック（副系→正系）
-    # --------------------------------------------------
-    if do_fallback_to_main; then
-        log_info "========== FIX自動フェイルオーバー終了（正系フェイルバック完了） =========="
-        exit 0
-    fi
-
-    log_info "========== FIX自動フェイルオーバー終了（要対応） =========="
-    exit 2  # 異常終了コード（STへ問い合わせ必要）
+        log_warn "${target}でも接続不可。${SWITCH_CYCLE_INTERVAL}秒後に切替を継続します。"
+        sleep "${SWITCH_CYCLE_INTERVAL}"
+    done
 }
 
 main "$@"
